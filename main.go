@@ -1,0 +1,210 @@
+package main
+
+import (
+	"bufio"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"regexp"
+	"time"
+
+	calv3 "google.golang.org/api/calendar/v3"
+
+	"github.com/tomwilkie/calstats/calendar"
+)
+
+var verbose bool
+var ignoreRegexps []*regexp.Regexp
+
+func main() {
+	var ignorelist string
+	flag.BoolVar(&verbose, "v", false, "")
+	flag.StringVar(&ignorelist, "ignorelist", "ignorelist", "")
+	flag.Parse()
+
+	// Load & compile ignore regexps.
+	var err error
+	ignoreRegexps, err = loadIgnores(ignorelist)
+	if err != nil {
+		log.Fatalf("Unable to parse ignore list: %v", err)
+	}
+
+	srv, err := calendar.Connect()
+	if err != nil {
+		log.Fatalf("Unable to retrieve Calendar client: %v", err)
+	}
+
+	for _, id := range flag.Args() {
+		if err := processCalendar(srv, id); err != nil {
+			log.Fatalf("Error processing calendar: %v", err)
+		}
+	}
+}
+
+func loadIgnores(filename string) ([]*regexp.Regexp, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	var result []*regexp.Regexp
+	for scanner.Scan() {
+		r, err := regexp.Compile(scanner.Text())
+		if err != nil {
+			return nil, err
+		}
+
+		result = append(result, r)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func processCalendar(srv *calv3.Service, id string) error {
+	cal, err := srv.Calendars.Get(id).Do()
+	if err != nil {
+		return err
+	}
+
+	start := time.Now()
+	end := start.Add(7 * 24 * time.Hour)
+	events, err := srv.Events.List(id).ShowDeleted(false).
+		SingleEvents(true).TimeMin(start.Format(time.RFC3339)).
+		TimeMax(end.Format(time.RFC3339)).
+		OrderBy("startTime").Do()
+	if err != nil {
+		return err
+	}
+
+	slots, err := workingSlots(7, cal.TimeZone)
+	if err != nil {
+		return err
+	}
+
+	var freeSlots int
+	var totalMeetings time.Duration
+
+	for i := 0; i < len(slots); i++ {
+		if verbose {
+			fmt.Println(slots[i].summary)
+		}
+
+		var meetingFound bool
+	next:
+		for j := 0; j < len(events.Items); j++ {
+			if ignoreEvent(id, events.Items[j]) {
+				continue next
+			}
+
+			var eventStart time.Time
+			var err error
+
+			if events.Items[j].OriginalStartTime != nil {
+				eventStart, err = time.Parse(time.RFC3339, events.Items[j].OriginalStartTime.DateTime)
+			} else {
+				eventStart, err = time.Parse(time.RFC3339, events.Items[j].Start.DateTime)
+			}
+			if err != nil {
+				continue next
+			} else if eventStart.After(slots[i].end) || eventStart.Equal(slots[i].end) {
+				//fmt.Println(events.Items[j].Summary, eventStart, ">", slots[i].end)
+				continue next
+			}
+
+			originalStart, err := time.Parse(time.RFC3339, events.Items[j].Start.DateTime)
+			originalEnd, err := time.Parse(time.RFC3339, events.Items[j].End.DateTime)
+			duration := originalEnd.Sub(originalStart)
+
+			eventEnd := eventStart.Add(duration)
+			if err != nil {
+				continue next
+			} else if eventEnd.Before(slots[i].start) || eventEnd.Equal(slots[i].start) {
+				//fmt.Println("\t", events.Items[j].Summary, eventEnd, "<", slots[i].start)
+				continue next
+			}
+
+			if verbose {
+				fmt.Printf("\t%v (%v->%v)\n", events.Items[j].Summary, eventStart, eventEnd)
+			}
+			meetingFound = true
+			totalMeetings += duration
+		}
+		if !meetingFound {
+			freeSlots++
+		}
+	}
+
+	fmt.Printf("%s: %s, %d / %d free slots, %v time in meetings (%0.0d%%)\n", id, cal.TimeZone, freeSlots, len(slots), totalMeetings, totalMeetings*100/(40*time.Hour))
+
+	return nil
+}
+
+func ignoreEvent(email string, event *calv3.Event) bool {
+	// We can skip some events based on name.
+	for _, r := range ignoreRegexps {
+		if r.MatchString(event.Summary) {
+			return true
+		}
+	}
+
+	// We should ignore events the user has explicity not accepted.
+	for _, attendee := range event.Attendees {
+		if attendee.Email == email && attendee.ResponseStatus == "declined" {
+			return true
+		}
+	}
+
+	return false
+}
+
+type slot struct {
+	summary    string
+	start, end time.Time
+}
+
+func workingSlots(days int, tz string) ([]slot, error) {
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return nil, err
+	}
+
+	// We assume people work 7am - 7pm in their local timezone.
+	start, err := time.ParseInLocation("15:04:05", "07:00:00", loc)
+	if err != nil {
+		return nil, err
+	}
+
+	yy, mm, dd := time.Now().Date()
+	start = start.AddDate(yy, int(mm)-1, dd)
+
+	result := []slot{}
+	for i := 0; i < days; i++ {
+		if start.Weekday() == time.Saturday || start.Weekday() == time.Sunday {
+			start = start.Add(24 * time.Hour)
+			continue
+		}
+
+		result = append(result,
+			slot{
+				summary: fmt.Sprintf("%s Morning", start.Format("Mon Jan 2")),
+				start:   start,
+				end:     start.Add(6 * time.Hour),
+			},
+			slot{
+				summary: fmt.Sprintf("%s Afternoon", start.Format("Mon Jan 2")),
+				start:   start.Add(6 * time.Hour),
+				end:     start.Add(12 * time.Hour),
+			},
+		)
+		start = start.Add(24 * time.Hour)
+	}
+
+	return result, err
+}
