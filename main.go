@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"encoding/csv"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"regexp"
+	"strconv"
 	"time"
 
 	calv3 "google.golang.org/api/calendar/v3"
@@ -35,8 +37,15 @@ func main() {
 		log.Fatalf("Unable to retrieve Calendar client: %v", err)
 	}
 
+	writer := csv.NewWriter(os.Stdout)
+	defer writer.Flush()
+
+	if err := writer.Write([]string{"email", "tz", "free slots", "meeting hours", "% meetings"}); err != nil {
+		log.Fatalf("Error writing CSV: %v", err)
+	}
+
 	for _, id := range flag.Args() {
-		if err := processCalendar(srv, id); err != nil {
+		if err := processCalendar(srv, id, writer); err != nil {
 			log.Fatalf("Error processing calendar: %v", err)
 		}
 	}
@@ -67,7 +76,9 @@ func loadIgnores(filename string) ([]*regexp.Regexp, error) {
 	return result, nil
 }
 
-func processCalendar(srv *calv3.Service, id string) error {
+func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
+	defer writer.Flush()
+
 	cal, err := srv.Calendars.Get(id).Do()
 	if err != nil {
 		return err
@@ -141,7 +152,13 @@ func processCalendar(srv *calv3.Service, id string) error {
 		}
 	}
 
-	fmt.Printf("%s: %s, %d / %d free slots, %v time in meetings (%0.0d%%)\n", id, cal.TimeZone, freeSlots, len(slots), totalMeetings, totalMeetings*100/(40*time.Hour))
+	if err := writer.Write([]string{
+		id, cal.TimeZone, strconv.Itoa(freeSlots),
+		fmt.Sprintf("%0.1f", totalMeetings.Hours()),
+		fmt.Sprintf("%0.0d%%", totalMeetings*100/(40*time.Hour)),
+	}); err != nil {
+		return err
+	}
 
 	return nil
 }
