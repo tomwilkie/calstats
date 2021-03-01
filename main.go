@@ -84,17 +84,15 @@ func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
 		return err
 	}
 
-	start := time.Now()
-	end := start.Add(7 * 24 * time.Hour)
-	events, err := srv.Events.List(id).ShowDeleted(false).
-		SingleEvents(true).TimeMin(start.Format(time.RFC3339)).
-		TimeMax(end.Format(time.RFC3339)).
-		OrderBy("startTime").Do()
+	slots, start, end, err := workingSlots(7, cal.TimeZone)
 	if err != nil {
 		return err
 	}
 
-	slots, err := workingSlots(7, cal.TimeZone)
+	events, err := srv.Events.List(id).ShowDeleted(false).
+		SingleEvents(true).TimeMin(start.Format(time.RFC3339)).
+		TimeMax(end.Format(time.RFC3339)).
+		OrderBy("startTime").Do()
 	if err != nil {
 		return err
 	}
@@ -110,10 +108,6 @@ func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
 		var meetingFound bool
 	next:
 		for j := 0; j < len(events.Items); j++ {
-			if ignoreEvent(id, events.Items[j]) {
-				continue next
-			}
-
 			var eventStart time.Time
 			var err error
 
@@ -138,6 +132,11 @@ func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
 				continue next
 			} else if eventEnd.Before(slots[i].start) || eventEnd.Equal(slots[i].start) {
 				//fmt.Println("\t", events.Items[j].Summary, eventEnd, "<", slots[i].start)
+				continue next
+			}
+
+			if ignoreEvent(id, events.Items[j]) {
+				fmt.Printf("\t%v (IGNORED %v->%v)\n", events.Items[j].Summary, eventStart, eventEnd)
 				continue next
 			}
 
@@ -186,42 +185,43 @@ type slot struct {
 	start, end time.Time
 }
 
-func workingSlots(days int, tz string) ([]slot, error) {
+func workingSlots(days int, tz string) ([]slot, time.Time, time.Time, error) {
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, time.Time{}, err
 	}
 
 	// We assume people work 7am - 7pm in their local timezone.
 	start, err := time.ParseInLocation("15:04:05", "07:00:00", loc)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, time.Time{}, err
 	}
 
 	yy, mm, dd := time.Now().Date()
-	start = start.AddDate(yy, int(mm)-1, dd)
+	start = start.AddDate(yy, int(mm)-1, dd-1)
+	end := start
 
 	result := []slot{}
 	for i := 0; i < days; i++ {
-		if start.Weekday() == time.Saturday || start.Weekday() == time.Sunday {
-			start = start.Add(24 * time.Hour)
+		if end.Weekday() == time.Saturday || end.Weekday() == time.Sunday {
+			end = end.Add(24 * time.Hour)
 			continue
 		}
 
 		result = append(result,
 			slot{
-				summary: fmt.Sprintf("%s Morning", start.Format("Mon Jan 2")),
-				start:   start,
-				end:     start.Add(6 * time.Hour),
+				summary: fmt.Sprintf("%s Morning", end.Format("Mon Jan 2")),
+				start:   end,
+				end:     end.Add(6 * time.Hour),
 			},
 			slot{
-				summary: fmt.Sprintf("%s Afternoon", start.Format("Mon Jan 2")),
-				start:   start.Add(6 * time.Hour),
-				end:     start.Add(12 * time.Hour),
+				summary: fmt.Sprintf("%s Afternoon", end.Format("Mon Jan 2")),
+				start:   end.Add(6 * time.Hour),
+				end:     end.Add(12 * time.Hour),
 			},
 		)
-		start = start.Add(24 * time.Hour)
+		end = end.Add(24 * time.Hour)
 	}
 
-	return result, err
+	return result, start, end, nil
 }
