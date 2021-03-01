@@ -1,7 +1,8 @@
-Lunch
+Lunch.*
 Zen mode
 Joe Time
-DNS
+Zen time.*
+DNS.*
 Individual Work Time
 [Uu]ninterr?upted [Ww]ork
 Mindful start to the day
@@ -20,9 +21,9 @@ Nope
 Reading / Focus time
 .*Break
 OOO.*
-Deep [Ww]ork
+Deep [Ww]ork.*
 Focused work
-[Ff]ocus [Tt]ime
+[Ff]ocus(ed)? [Tt]ime
 Reduced Availability
 PTO
-day off
+day off.*

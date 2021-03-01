@@ -136,7 +136,9 @@ func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
 			}
 
 			if ignoreEvent(id, events.Items[j]) {
-				fmt.Printf("\t%v (IGNORED %v->%v)\n", events.Items[j].Summary, eventStart, eventEnd)
+				if verbose {
+					fmt.Printf("\t%v (IGNORED %v->%v)\n", events.Items[j].Summary, eventStart, eventEnd)
+				}
 				continue next
 			}
 
