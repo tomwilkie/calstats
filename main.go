@@ -61,7 +61,7 @@ func loadIgnores(filename string) ([]*regexp.Regexp, error) {
 	scanner := bufio.NewScanner(file)
 	var result []*regexp.Regexp
 	for scanner.Scan() {
-		r, err := regexp.Compile(scanner.Text())
+		r, err := regexp.Compile("^" + scanner.Text() + "$")
 		if err != nil {
 			return nil, err
 		}
