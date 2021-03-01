@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	calv3 "google.golang.org/api/calendar/v3"
@@ -61,7 +62,12 @@ func loadIgnores(filename string) ([]*regexp.Regexp, error) {
 	scanner := bufio.NewScanner(file)
 	var result []*regexp.Regexp
 	for scanner.Scan() {
-		r, err := regexp.Compile("^" + scanner.Text() + "$")
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		r, err := regexp.Compile("^" + line + "$")
 		if err != nil {
 			return nil, err
 		}
@@ -137,7 +143,7 @@ func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
 
 			if ignoreEvent(id, events.Items[j]) {
 				if verbose {
-					fmt.Printf("\t%v (IGNORED %v->%v)\n", events.Items[j].Summary, eventStart, eventEnd)
+					fmt.Printf("\t%v (IGNORED)\n", events.Items[j].Summary)
 				}
 				continue next
 			}

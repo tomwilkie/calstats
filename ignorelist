@@ -1,29 +1,40 @@
-Lunch.*
+# List of events to ingore.
+# NB all regexps are fully anchored.
+
+# Ignore explicitly marked "focus time"
 Zen mode
-Joe Time
 Zen time.*
+Joe Time
 DNS.*
 Individual Work Time
 [Uu]ninterr?upted [Ww]ork
-Mindful start to the day
-Mindfulness break
-retro and mindful end to the day
-Out of Office
-.*Lunch
-.*Morning Catch Up
-.*Afternoon Catch Up
-.*Personal Commitment
-.*family time.*
-Out of office.*
 .*Afternoon Focus
-AFK / lunch
 Nope
-Reading / Focus time
-.*Break
-OOO.*
 Deep [Ww]ork.*
 Focused work
 [Ff]ocus(ed)? [Tt]ime
-Reduced Availability
+Reading / Focus time
+
+# Ignore holidays
+Out of [Oo]ffice.*
+OOO.*
 PTO
 day off.*
+
+# Ignore personal time
+.*Break
+Reduced Availability
+.*bike ride.*
+Mindful start to the day
+Mindfulness break
+retro and mindful end to the day
+Air
+BLOCK.*
+.*Personal Commitment
+.*family time.*
+
+# Ignore stuff added by reclaim.ai
+AFK / lunch
+.*[Ll]unch.*
+.*Morning Catch Up
+.*Afternoon Catch Up
