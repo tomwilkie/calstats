@@ -171,6 +171,18 @@ func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
 }
 
 func ignoreEvent(email string, event *calv3.Event) bool {
+
+	// Ignore events with only the owner as te attendee, created
+	// by the owner.
+	if event.Creator != nil && event.Creator.Self {
+		if len(event.Attendees) == 0 {
+			return true
+		}
+		if len(event.Attendees) == 1 && event.Attendees[0].Email == email {
+			return true
+		}
+	}
+
 	// We can skip some events based on name.
 	for _, r := range ignoreRegexps {
 		if r.MatchString(event.Summary) {
