@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -19,11 +20,27 @@ import (
 
 var verbose bool
 var ignoreRegexps []*regexp.Regexp
+var start string
+var duration int
+
+const (
+	personal    = "personal"
+	ignore      = "ignored"
+	declined    = "declined"
+	notAccepted = "not accepted"
+	hiring      = "hiring"
+	meeting     = "meeting"
+)
+
+var categories = []string{personal, ignore, declined, notAccepted, hiring, meeting}
+var count = []string{hiring, meeting}
 
 func main() {
 	var ignorelist string
 	flag.BoolVar(&verbose, "v", false, "")
 	flag.StringVar(&ignorelist, "ignorelist", "ignorelist", "")
+	flag.StringVar(&start, "start", time.Now().Format("2006/01/02")+" 07:00:00", "")
+	flag.IntVar(&duration, "duration", 24*7, "hours")
 	flag.Parse()
 
 	// Load & compile ignore regexps.
@@ -41,7 +58,10 @@ func main() {
 	writer := csv.NewWriter(os.Stdout)
 	defer writer.Flush()
 
-	if err := writer.Write([]string{"email", "tz", "free slots", "meeting hours", "% meetings"}); err != nil {
+	columns := []string{"email", "tz", "free slots"}
+	columns = append(columns, categories...)
+	columns = append(columns, "meeting hours", "% meetings")
+	if err := writer.Write(columns); err != nil {
 		log.Fatalf("Error writing CSV: %v", err)
 	}
 
@@ -105,6 +125,7 @@ func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
 
 	var freeSlots int
 	var totalMeetings time.Duration
+	totals := map[string]time.Duration{}
 
 	for i := 0; i < len(slots); i++ {
 		if verbose {
@@ -141,63 +162,72 @@ func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
 				continue next
 			}
 
-			if ignoreEvent(id, events.Items[j]) {
-				if verbose {
-					fmt.Printf("\t%v (IGNORED)\n", events.Items[j].Summary)
-				}
-				continue next
+			category := categorise(id, events.Items[j])
+			totals[category] += duration
+			if verbose {
+				fmt.Printf("\t%v (%s, %v->%v)\n", events.Items[j].Summary, category, eventStart.Format("15:04:05"), eventEnd.Format("15:04:05"))
 			}
 
-			if verbose {
-				fmt.Printf("\t%v (%v->%v)\n", events.Items[j].Summary, eventStart, eventEnd)
+			if i := sort.SearchStrings(count, category); i < len(count) && count[i] == category {
+				totalMeetings += duration
+				meetingFound = true
 			}
-			meetingFound = true
-			totalMeetings += duration
 		}
 		if !meetingFound {
 			freeSlots++
 		}
 	}
 
-	if err := writer.Write([]string{
-		id, cal.TimeZone, strconv.Itoa(freeSlots),
-		fmt.Sprintf("%0.1f", totalMeetings.Hours()),
-		fmt.Sprintf("%0.0d%%", totalMeetings*100/(40*time.Hour)),
-	}); err != nil {
+	columns := []string{id, cal.TimeZone, strconv.Itoa(freeSlots)}
+	for _, c := range categories {
+		columns = append(columns, fmt.Sprintf("%0.1f", totals[c].Hours()))
+	}
+	columns = append(columns, fmt.Sprintf("%0.1f", totalMeetings.Hours()), fmt.Sprintf("%0.0d%%", totalMeetings*100/(40*time.Hour)))
+
+	if err := writer.Write(columns); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func ignoreEvent(email string, event *calv3.Event) bool {
+func categorise(email string, event *calv3.Event) (reason string) {
+	if strings.Contains(event.Description, "https://hire.lever.co/interviews") {
+		return "hiring"
+	}
 
 	// Ignore events with only the owner as te attendee, created
 	// by the owner.
 	if event.Creator != nil && event.Creator.Self {
 		if len(event.Attendees) == 0 {
-			return true
+			return "personal"
 		}
 		if len(event.Attendees) == 1 && event.Attendees[0].Email == email {
-			return true
+			return "personal"
 		}
 	}
 
 	// We can skip some events based on name.
 	for _, r := range ignoreRegexps {
 		if r.MatchString(event.Summary) {
-			return true
+			return "ignored"
 		}
 	}
 
 	// We should ignore events the user has explicity not accepted.
 	for _, attendee := range event.Attendees {
-		if attendee.Email == email && attendee.ResponseStatus != "accepted" {
-			return true
+		if attendee.Email != email {
+			continue
+		}
+		if attendee.ResponseStatus == "declined" {
+			return "declined"
+		}
+		if attendee.ResponseStatus != "accepted" {
+			return "not accepted"
 		}
 	}
 
-	return false
+	return "meeting"
 }
 
 type slot struct {
@@ -212,14 +242,12 @@ func workingSlots(days int, tz string) ([]slot, time.Time, time.Time, error) {
 	}
 
 	// We assume people work 7am - 7pm in their local timezone.
-	start, err := time.ParseInLocation("15:04:05", "07:00:00", loc)
+	start, err := time.ParseInLocation("2006/01/02 15:04:05", start, loc)
 	if err != nil {
 		return nil, time.Time{}, time.Time{}, err
 	}
 
-	yy, mm, dd := time.Now().Date()
-	start = start.AddDate(yy, int(mm)-1, dd-1)
-	end := start
+	end := start.Add(time.Duration(duration) * time.Hour)
 
 	result := []slot{}
 	for i := 0; i < days; i++ {
