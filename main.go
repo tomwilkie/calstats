@@ -192,7 +192,7 @@ func ignoreEvent(email string, event *calv3.Event) bool {
 
 	// We should ignore events the user has explicity not accepted.
 	for _, attendee := range event.Attendees {
-		if attendee.Email == email && attendee.ResponseStatus == "declined" {
+		if attendee.Email == email && attendee.ResponseStatus != "accepted" {
 			return true
 		}
 	}
