@@ -129,7 +129,7 @@ func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
 
 	for i := 0; i < len(slots); i++ {
 		if verbose {
-			fmt.Println(slots[i].summary)
+			fmt.Printf("%s (%s -> %s)\n", slots[i].summary, slots[i].start.Format("15:04:05"), slots[i].end.Format("15:04:05"))
 		}
 
 		var meetingFound bool
@@ -165,7 +165,7 @@ func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
 			category := categorise(id, events.Items[j])
 			totals[category] += duration
 			if verbose {
-				fmt.Printf("\t%v (%s, %v->%v)\n", events.Items[j].Summary, category, eventStart.Format("15:04:05"), eventEnd.Format("15:04:05"))
+				fmt.Printf("\t%v (%s, %v->%v)\n", events.Items[j].Summary, category, eventStart, eventEnd)
 			}
 
 			if i := sort.SearchStrings(count, category); i < len(count) && count[i] == category {
@@ -242,13 +242,13 @@ func workingSlots(days int, tz string) ([]slot, time.Time, time.Time, error) {
 	}
 
 	// We assume people work 7am - 7pm in their local timezone.
+	fmt.Println(start)
 	start, err := time.ParseInLocation("2006/01/02 15:04:05", start, loc)
 	if err != nil {
 		return nil, time.Time{}, time.Time{}, err
 	}
 
-	end := start.Add(time.Duration(duration) * time.Hour)
-
+	end := start
 	result := []slot{}
 	for i := 0; i < days; i++ {
 		if end.Weekday() == time.Saturday || end.Weekday() == time.Sunday {
