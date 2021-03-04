@@ -58,7 +58,7 @@ func main() {
 	writer := csv.NewWriter(os.Stdout)
 	defer writer.Flush()
 
-	columns := []string{"email", "tz", "free slots"}
+	columns := []string{"email", "tz", "half days free"}
 	columns = append(columns, categories...)
 	columns = append(columns, "meeting hours", "% meetings")
 	if err := writer.Write(columns); err != nil {
@@ -110,7 +110,7 @@ func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
 		return err
 	}
 
-	slots, start, end, err := workingSlots(7, cal.TimeZone)
+	slots, start, end, err := workingSlots(cal.TimeZone)
 	if err != nil {
 		return err
 	}
@@ -127,45 +127,33 @@ func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
 	var totalMeetings time.Duration
 	totals := map[string]time.Duration{}
 
-	for i := 0; i < len(slots); i++ {
+	for _, slot := range slots {
 		if verbose {
-			fmt.Printf("%s (%s -> %s)\n", slots[i].summary, slots[i].start.Format("15:04:05"), slots[i].end.Format("15:04:05"))
+			fmt.Printf("%s (%s -> %s)\n", slot.summary, slot.start.Format("15:04:05"), slot.end.Format("15:04:05"))
 		}
 
 		var meetingFound bool
 	next:
-		for j := 0; j < len(events.Items); j++ {
-			var eventStart time.Time
-			var err error
-
-			if events.Items[j].OriginalStartTime != nil {
-				eventStart, err = time.Parse(time.RFC3339, events.Items[j].OriginalStartTime.DateTime)
-			} else {
-				eventStart, err = time.Parse(time.RFC3339, events.Items[j].Start.DateTime)
+		for _, event := range events.Items {
+			// Ignore all day-events.
+			if event.Start.DateTime == "" {
+				continue
 			}
+
+			start, end, err := parseStartEnd(event)
 			if err != nil {
-				continue next
-			} else if eventStart.After(slots[i].end) || eventStart.Equal(slots[i].end) {
-				//fmt.Println(events.Items[j].Summary, eventStart, ">", slots[i].end)
+				return err
+			}
+
+			if !(start.Before(slot.end) && end.After(slot.start)) {
 				continue next
 			}
 
-			originalStart, err := time.Parse(time.RFC3339, events.Items[j].Start.DateTime)
-			originalEnd, err := time.Parse(time.RFC3339, events.Items[j].End.DateTime)
-			duration := originalEnd.Sub(originalStart)
-
-			eventEnd := eventStart.Add(duration)
-			if err != nil {
-				continue next
-			} else if eventEnd.Before(slots[i].start) || eventEnd.Equal(slots[i].start) {
-				//fmt.Println("\t", events.Items[j].Summary, eventEnd, "<", slots[i].start)
-				continue next
-			}
-
-			category := categorise(id, events.Items[j])
+			category := categorise(id, event)
+			duration := end.Sub(start)
 			totals[category] += duration
 			if verbose {
-				fmt.Printf("\t%v (%s, %v->%v)\n", events.Items[j].Summary, category, eventStart, eventEnd)
+				fmt.Printf("\t%v [%s]: %s (%0.0fmins)\n", start.Format("15:04:05"), category, event.Summary, duration.Minutes())
 			}
 
 			if i := sort.SearchStrings(count, category); i < len(count) && count[i] == category {
@@ -189,6 +177,49 @@ func processCalendar(srv *calv3.Service, id string, writer *csv.Writer) error {
 	}
 
 	return nil
+}
+
+func parseStartEnd(event *calv3.Event) (start time.Time, end time.Time, err error) {
+	// Calendars are... hard.
+	// We have 2 starts, and 1 end:
+	// - Start: The (inclusive) start time of the event. For a recurring
+	//   event, this is the start time of the first instance.
+	// - End: The (exclusive) end time of the event. For a recurring event,
+	//   this is the end time of the first instance.
+	// - OriginalStartTime: For an instance of a recurring event, this is the
+	//   time at which this event would start according to the recurrence data
+	//   in the recurring event identified by recurringEventId. It uniquely
+	//   identifies the instance within the recurring event series even if the
+	//   instance was moved to a different time. Immutable.
+	//
+	// There seems to be no "OriginalEndTime".  Or Event duration.
+	// However, sometimes I've found OriginalStartTime < Start - WTF?
+
+	start, err = time.Parse(time.RFC3339, event.Start.DateTime)
+	if err != nil {
+		return
+	}
+
+	var originalStart time.Time
+	if event.OriginalStartTime != nil {
+		originalStart, err = time.Parse(time.RFC3339, event.Start.DateTime)
+		if err != nil {
+			return
+		}
+
+		if originalStart.After(start) {
+			start = originalStart
+		}
+	}
+
+	end, err = time.Parse(time.RFC3339, event.End.DateTime)
+	if err != nil {
+		return
+	}
+
+	return
+	//	duration := originalEnd.Sub(originalStart)
+	//	end := eventStart.Add(duration)
 }
 
 func categorise(email string, event *calv3.Event) (reason string) {
@@ -235,40 +266,37 @@ type slot struct {
 	start, end time.Time
 }
 
-func workingSlots(days int, tz string) ([]slot, time.Time, time.Time, error) {
+func workingSlots(tz string) ([]slot, time.Time, time.Time, error) {
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
 		return nil, time.Time{}, time.Time{}, err
 	}
 
 	// We assume people work 7am - 7pm in their local timezone.
-	fmt.Println(start)
 	start, err := time.ParseInLocation("2006/01/02 15:04:05", start, loc)
 	if err != nil {
 		return nil, time.Time{}, time.Time{}, err
 	}
 
-	end := start
+	end := start.Add(time.Duration(duration) * time.Hour)
 	result := []slot{}
-	for i := 0; i < days; i++ {
-		if end.Weekday() == time.Saturday || end.Weekday() == time.Sunday {
-			end = end.Add(24 * time.Hour)
+	for curr := start; curr.Before(end); curr = curr.Add(24 * time.Hour) {
+		if curr.Weekday() == time.Saturday || curr.Weekday() == time.Sunday {
 			continue
 		}
 
 		result = append(result,
 			slot{
-				summary: fmt.Sprintf("%s Morning", end.Format("Mon Jan 2")),
-				start:   end,
-				end:     end.Add(6 * time.Hour),
+				summary: fmt.Sprintf("%s Morning", curr.Format("Mon Jan 2")),
+				start:   curr,
+				end:     curr.Add(6 * time.Hour),
 			},
 			slot{
-				summary: fmt.Sprintf("%s Afternoon", end.Format("Mon Jan 2")),
-				start:   end.Add(6 * time.Hour),
-				end:     end.Add(12 * time.Hour),
+				summary: fmt.Sprintf("%s Afternoon", curr.Format("Mon Jan 2")),
+				start:   curr.Add(6 * time.Hour),
+				end:     curr.Add(12 * time.Hour),
 			},
 		)
-		end = end.Add(24 * time.Hour)
 	}
 
 	return result, start, end, nil
