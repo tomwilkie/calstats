@@ -225,6 +225,8 @@ func parseStartEnd(event *calv3.Event) (start time.Time, end time.Time, err erro
 func categorise(email string, event *calv3.Event) (reason string) {
 	if strings.Contains(event.Description, "https://hire.lever.co/interviews") {
 		return "hiring"
+	} else if strings.Contains(event.Summary, "Debrief") && strings.Contains(event.Description, "SHADOWER") {
+		return "hiring"
 	}
 
 	// Ignore events with only the owner as te attendee, created
